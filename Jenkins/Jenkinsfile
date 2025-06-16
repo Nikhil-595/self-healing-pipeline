@@ -1,0 +1,49 @@
+pipeline {
+  agent any
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Build') {
+      steps {
+        sh './build.sh'
+      }
+    }
+
+    stage('Test') {
+      steps {
+        sh './run-tests.sh'
+      }
+    }
+  }
+
+  post {
+    failure {
+      script {
+        def logs = currentBuild.rawBuild.getLog(1000).join("\n")
+
+        def response = httpRequest(
+          url: 'https://your-api-gateway-url/invoke',
+          httpMode: 'POST',
+          contentType: 'APPLICATION_JSON',
+          requestBody: groovy.json.JsonOutput.toJson([log: logs])
+        )
+
+        def result = new groovy.json.JsonSlurper().parseText(response.content)
+        echo "AI Analysis: ${result.analysis}"
+
+        def healingDecision = evaluate(new File("${WORKSPACE}/jenkins/retry_decision.groovy"))
+        if (healingDecision.shouldRetry(result.analysis)) {
+          cleanWs()
+          build job: env.JOB_NAME, parameters: currentBuild.rawBuild.getAction(ParametersAction).parameters
+        } else {
+          echo "Manual intervention required."
+        }
+      }
+    }
+  }
+}
